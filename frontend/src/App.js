@@ -1,93 +1,29 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ethers, Contract, parseEther, formatEther } from "ethers";
 import AIModelNFT from "./AIModelNFT.json";
-import { uploadToPinata } from "./pinata";
+import WalletConnect from "./components/WalletConnect";
+import MintForm from "./components/MintForm";
+import ModelGrid from "./components/ModelGrid";
+import "./styles/App.css";
 
 const CONTRACT_ADDRESS = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
-const HARDHAT_CHAIN_ID = "0x7A69"; // Hardhat local chain id in hex
 
 function App() {
   const [account, setAccount] = useState(null);
+  const [provider, setProvider] = useState(null);
+  const [signer, setSigner] = useState(null);
   const [contract, setContract] = useState(null);
   const [models, setModels] = useState([]);
-  const [price, setPrice] = useState("");
-  const [file, setFile] = useState(null);
-  const [desc, setDesc] = useState("");
-  const [agreed, setAgreed] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  // 🔹 Connect Wallet
-  async function connectWallet() {
-    if (!window.ethereum) return alert("MetaMask not detected!");
-    try {
-      await window.ethereum.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: HARDHAT_CHAIN_ID }],
-      });
-    } catch (err) {
-      if (err.code === 4902) {
-        try {
-          await window.ethereum.request({
-            method: "wallet_addEthereumChain",
-            params: [
-              {
-                chainId: HARDHAT_CHAIN_ID,
-                chainName: "Hardhat Localhost 8545",
-                nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-                rpcUrls: ["http://127.0.0.1:8545/"],
-              },
-            ],
-          });
-        } catch (addErr) {
-          console.error("Failed to add network:", addErr);
-          return;
-        }
-      } else {
-        console.error("Network switch error:", err);
-        return;
-      }
-    }
-
-    const provider = new ethers.BrowserProvider(window.ethereum, {
-      name: "hardhat",
-      chainId: 31337,
-    });
-
-    const signer = await provider.getSigner();
-    const addr = await signer.getAddress();
-    setAccount(addr);
-
+  const handleWalletConnect = ({ provider: walletProvider, signer: walletSigner, address }) => {
+    setProvider(walletProvider);
+    setSigner(walletSigner);
+    setAccount(address);
+    
     const c = new Contract(CONTRACT_ADDRESS, AIModelNFT.abi, signer);
     setContract(c);
-  }
-
-  // 🔹 Mint NFT
-  async function mintNFT() {
-    if (!file || !price || !contract) {
-      alert("Connect wallet, select file & set price!");
-      return;
-    }
-    if (!agreed) {
-      alert("You must agree not to misuse the model before minting.");
-      return;
-    }
-
-    try {
-      console.log("📤 Uploading to Pinata...");
-      const tokenURI = await uploadToPinata(file, desc);
-      if (!tokenURI) throw new Error("Pinata upload failed");
-
-      console.log("✅ Metadata stored at:", tokenURI);
-      console.log("⛓️ Sending mint transaction...");
-      const tx = await contract.mintModel(tokenURI, parseEther(price));
-      await tx.wait(); // ✅ Wait for block confirmation
-
-      alert("✅ NFT Minted Successfully");
-      await loadModels(); // ✅ Immediately reload NFTs
-    } catch (err) {
-      console.error("❌ Minting error:", err);
-      alert("Mint failed! Check console for details.");
-    }
-  }
+  };
 
   // 🔹 Fetch metadata
   async function fetchMetadata(tokenURI) {
@@ -106,12 +42,17 @@ function App() {
   // 🔹 Load NFTs
   const loadModels = useCallback(async () => {
     if (!contract) return;
+    setIsLoading(true);
     try {
       const totalBN = await contract.tokenCounter();
       const total = Number(totalBN);
       console.log("📦 Total NFTs:", total);
 
-      if (total === 0) return setModels([]);
+      if (total === 0) {
+        setModels([]);
+        setIsLoading(false);
+        return;
+      }
 
       const items = [];
       for (let i = 0; i < total; i++) {
@@ -139,6 +80,8 @@ function App() {
       console.log("✅ Loaded items:", items);
     } catch (err) {
       console.error("Load error:", err);
+    } finally {
+      setIsLoading(false);
     }
   }, [contract]);
 
@@ -173,106 +116,30 @@ function App() {
   }, [contract, loadModels]);
 
   return (
-    <div style={{ padding: "20px" }}>
-      <h1>🚀 AI Model NFT Marketplace</h1>
+    <div className="app">
+      <header className="app-header">
+        <h1>🤖 AI Model NFT Marketplace</h1>
+        <p>Decentralized marketplace for AI models as NFTs</p>
+        <WalletConnect onConnect={handleWalletConnect} account={account} />
+      </header>
 
-      {!account ? (
-        <button onClick={connectWallet}>Connect Wallet</button>
-      ) : (
-        <p>✅ Connected as {account}</p>
-      )}
-
-      <h2>Mint AI Model NFT</h2>
-      <input type="file" onChange={(e) => setFile(e.target.files[0])} />
-      <input
-        type="text"
-        placeholder="Price in ETH"
-        value={price}
-        onChange={(e) => setPrice(e.target.value)}
-      />
-      <input
-        type="text"
-        placeholder="Model description"
-        value={desc}
-        onChange={(e) => setDesc(e.target.value)}
-      />
-      <div style={{ marginTop: "8px" }}>
-        <input
-          type="checkbox"
-          checked={agreed}
-          onChange={(e) => setAgreed(e.target.checked)}
-        />
-        <label> I agree not to misuse this model</label>
-      </div>
-      <button onClick={mintNFT} disabled={!agreed}>
-        Mint NFT
-      </button>
-
-      <h2>Available AI Model NFTs</h2>
-      <button onClick={loadModels}>🔄 Refresh</button>
-
-      <div>
-        {models.length === 0 ? (
-          <p>No NFTs minted yet.</p>
-        ) : (
-          models.map((m) => (
-            <div
-              key={m.tokenId}
-              style={{
-                border: "1px solid black",
-                margin: "10px",
-                padding: "10px",
-                borderRadius: "8px",
-              }}
-            >
-              <p>
-                <b>Token ID:</b> {m.tokenId}
-              </p>
-              <p>
-                <b>Owner:</b> {m.owner}
-              </p>
-              <p>
-                <b>Price:</b> {Number(m.price).toFixed(3)} ETH
-              </p>
-              <p>
-                <b>Status:</b> {m.forSale ? "For Sale" : "Not for Sale"}
-              </p>
-              <p>
-                <b>Metadata:</b>{" "}
-                <a
-                  href={m.tokenURI.replace("ipfs://", "https://ipfs.io/ipfs/")}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View JSON
-                </a>
-              </p>
-              {m.metadata?.image && (
-                <p>
-                  <b>AI Model File:</b>{" "}
-                  <a
-                    href={m.metadata.image.replace(
-                      "ipfs://",
-                      "https://ipfs.io/ipfs/"
-                    )}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Download
-                  </a>
-                </p>
-              )}
-
-              {m.forSale && account !== m.owner && (
-                <button onClick={() => buyNFT(m.tokenId, m.price)}>Buy</button>
-              )}
-              {account === m.owner && !m.forSale && (
-                <button onClick={() => listNFT(m.tokenId)}>List for Sale</button>
-              )}
-            </div>
-          ))
+      <main className="app-main">
+        {account && contract && (
+          <MintForm 
+            contract={contract} 
+            onMintSuccess={loadModels}
+          />
         )}
-      </div>
+        
+        <ModelGrid
+          models={models}
+          account={account}
+          onBuy={buyNFT}
+          onList={listNFT}
+          onRefresh={loadModels}
+          isLoading={isLoading}
+        />
+      </main>
     </div>
   );
 }
